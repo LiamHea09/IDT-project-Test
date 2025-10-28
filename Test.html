@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Sign → Text (MediaPipe + Fingerpose)</title>
+  <style>
+    body { font-family: system-ui, Arial; display:flex; gap:20px; padding:20px; }
+    #left { display:flex; flex-direction:column; gap:8px; }
+    video, canvas { border-radius:8px; box-shadow:0 6px 18px rgba(0,0,0,0.15); }
+    video { transform: scaleX(-1); } /* mirror */
+    .controls { display:flex; gap:8px; margin-top:6px; }
+    textarea { width:420px; height:300px; font-size:16px; padding:10px; }
+    button { padding:8px 12px; border-radius:6px; border:1px solid #ccc; background:#fff; cursor:pointer; }
+    .status { font-size:14px; color:#444; margin-top:6px; }
+  </style>
+</head>
+<body>
+  <div id="left">
+    <video id="video" autoplay playsinline></video>
+    <canvas id="overlay" width="640" height="480"></canvas>
+    <div class="controls">
+      <button id="startBtn">Start Camera</button>
+      <button id="stopBtn">Stop Camera</button>
+      <button id="clearBtn">Clear Text</button>
+      <button id="downloadBtn">Download .txt</button>
+    </div>
+    <div class="status" id="status">Status: stopped</div>
+    <div style="font-size:13px;margin-top:6px;color:#555">
+      Stable detection required: a gesture must be seen for N consecutive frames before it is accepted.
+    </div>
+  </div>
+
+  <div id="right">
+    <h3>Recognized text</h3>
+    <textarea id="output" placeholder="Recognized letters / words appear here..."></textarea>
+    <div style="margin-top:10px; font-size:13px; color:#333">
+      <strong>Built-in gestures:</strong> A (fist), B (flat open palm), L (thumb+index), C (curved). 
+      Add or tune gestures in the JS (see comments).
+    </div>
+  </div>
+
+  <!-- MediaPipe Hands -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+
+  <!-- Fingerpose (Gesture Estimator) -->
+  <script src="https://unpkg.com/fingerpose/dist/fingerpose.min.js"></script>
+
+  <script>
+  // --- Elements ---
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('overlay');
+  const ctx = canvas.getContext('2d');
+  const startBtn = document.getElementById('startBtn');
+  const stopBtn  = document.getElementById('stopBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const downloadBtn = document.getElementById('downloadBtn');
+  const statusEl = document.getElementById('status');
+  const outputEl = document.getElementById('output');
+
+  // --- stability: require N consecutive detections of the same gesture ---
+  const STABILITY_FRAMES = 8;
+  let stableCount = 0;
+  let lastGesture = null;
+
+  // --- Setup MediaPipe Hands ---
+  const hands = new Hands({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+  });
+  hands.setOptions({
+    maxNumHands: 1,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.7,
+    minTrackingConfidence: 0.6
+  });
+
+  hands.onResults(onResults);
+
+  // Camera helper from MediaPipe
+  let cameraInstance = null;
+  startBtn.addEventListener('click', async () => {
+    if (cameraInstance) return;
+    cameraInstance = new Camera(video, {
+      onFrame: async () => { await hands.send({image: video}); },
+      width: 640,
+      height: 480
+    });
+    await cameraInstance.start();
+    statusEl.textContent = 'Status: running';
+  });
+
+  stopBtn.addEventListener('click', () => {
+    if (cameraInstance) {
+      cameraInstance.stop();
+      cameraInstance = null;
+    }
+    statusEl.textContent = 'Status: stopped';
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+  });
+
+  clearBtn.addEventListener('click', () => outputEl.value = '');
+
+  downloadBtn.addEventListener('click', () => {
+    const text = outputEl.value || '';
+    const blob = new Blob([text], {type: 'text/plain'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'sign_text.txt';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  });
+
+  // --- Define gestures using Fingerpose ---
+  const fp = window.fp; // fingerpose namespace
+
+  // Helper: quickly create a "fist" (all curls full) gesture for "A"
+  const A_gesture = new fp.GestureDescription('A'); // fist
+  for (let finger of [fp.Finger.Thumb, fp.Finger.Index, fp.Finger.Middle, fp.Finger.Ring, fp.Finger.Pinky]) {
+    A_gesture.addCurl(finger, fp.FingerCurl.FullCurl, 1.0);
+  }
+
+  // "B" = open flat palm (all extended, minimal curl)
+  const B_gesture = new fp.GestureDescription('B');
+  for (let f of [fp.Finger.Index, fp.Finger.Middle, fp.Finger.Ring, fp.Finger.Pinky]) {
+    B_gesture.addCurl(f, fp.FingerCurl.NoCurl, 1.0);
+  }
+  // thumb may be across palm or slightly curled; allow half curl as acceptable
+  B_gesture.addCurl(fp.Finger.Thumb, fp.FingerCurl.HalfCurl, 0.7);
+  B_gesture.addCurl(fp.Finger.Thumb, fp.FingerCurl.NoCurl, 0.3);
+
+  // "L" = index and thumb extended, others curled
+  const L_gesture = new fp.GestureDescription('L');
+  L_gesture.addCurl(fp.Finger.Index, fp.FingerCurl.NoCurl, 1.0);
+  L_gesture.addCurl(fp.Finger.Thumb, fp.FingerCurl.NoCurl, 1.0);
+  for (let f of [fp.Finger.Middle, fp.Finger.Ring, fp.Finger.Pinky]) {
+    L_gesture.addCurl(f, fp.FingerCurl.FullCurl, 1.0);
+  }
+
+  // "C" = curved shape: fingers not fully extended, not fully closed (approximate)
+  const C_gesture = new fp.GestureDescription('C');
+  // allow half curl for index..pinky
+  for (let f of [fp.Finger.Index, fp.Finger.Middle, fp.Finger.Ring, fp.Finger.Pinky]) {
+    C_gesture.addCurl(f, fp.FingerCurl.HalfCurl, 1.0);
+    // accept some additional flexibility
+    C_gesture.addCurl(f, fp.FingerCurl.NoCurl, 0.2);
+  }
+  // thumb somewhat opposite index
+  C_gesture.addCurl(fp.Finger.Thumb, fp.FingerCurl.HalfCurl, 0.8);
+
+  // Build estimator. You can add more GestureDescription objects here.
+  const GE = new fp.GestureEstimator([A_gesture, B_gesture, L_gesture, C_gesture]);
+
+  // --- onResults callback: runs every time MediaPipe returns landmarks ---
+  function onResults(results) {
+    // clear canvas
+    ctx.save();
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    // draw image mirrored (video is mirrored by CSS but drawing_utils draws from original)
+    ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+      const landmarks = results.multiHandLandmarks[0];
+
+      // Draw hand landmarks + connections
+      drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 2});
+      drawLandmarks(ctx, landmarks, {color: '#FF0000', lineWidth: 1});
+
+      // fingerpose expects an array of {x,y,z} normalized, same format as MediaPipe provides
+      const est = GE.estimate(landmarks, 8.5); // threshold lower means more permissive
+
+      if (est.gestures && est.gestures.length > 0) {
+        // pick gesture with highest score
+        const result = est.gestures.reduce((p,c) => (p.score > c.score)?p:c);
+        const gestureName = result.name;
+
+        // stability: only accept when same label appears many frames in a row
+        if (gestureName === lastGesture) {
+          stableCount++;
+        } else {
+          stableCount = 1;
+          lastGesture = gestureName;
+        }
+
+        // display predicted gesture on canvas
+        ctx.font = '26px Arial';
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(8, 8, 160, 40);
+        ctx.fillStyle = '#fff';
+        ctx.fillText(`${gestureName} (${Math.round(result.score*100)}%)`, 14, 36);
+
+        if (stableCount >= STABILITY_FRAMES) {
+          // Accept gesture and append to the textarea (then reset stability to avoid duplicates)
+          appendRecognized(gestureName);
+          stableCount = 0;
+          lastGesture = null;
+        }
+      } else {
+        // no gesture detected this frame
+        stableCount = 0;
+        lastGesture = null;
+      }
+    } else {
+      // nothing detected
+      stableCount = 0;
+      lastGesture = null;
+    }
+
+    ctx.restore();
+  }
+
+  // Append recognized gesture token to textarea — here we append the letter + space.
+  // You can change mapping or make it produce full words.
+  function appendRecognized(gestureName) {
+    const map = {
+      'A': 'A',
+      'B': 'B',
+      'L': 'L',
+      'C': 'C'
+    };
+    const char = map[gestureName] || `[${gestureName}]`;
+    // append with a short timestamp optionally
+    outputEl.value += char;
+    // auto-scroll
+    outputEl.scrollTop = outputEl.scrollHeight;
+    // small visual feedback
+    statusEl.textContent = `Last accepted: ${char} (gesture ${gestureName})`;
+  }
+
+  // Helpful: try automatically starting camera on load (optional)
+  // startBtn.click();
+  </script>
+</body>
+</html>
