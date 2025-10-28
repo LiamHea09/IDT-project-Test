@@ -57,10 +57,10 @@ pip install -r requirements.txt
 
 ```bash
 # run the project-level wrapper (will activate .venv if present)
-./run.sh --demo "hello my name judah"
+./run.sh --model_path model_onehand.pkl --demo "hello my name (name)"
 
 # or use the venv-local launcher created at .venv/bin/run
-.venv/bin/run --demo "hello my name judah"
+.venv/bin/run --model_path model_onehand.pkl --demo "hello my name (name)"
 ```
 
 Make the scripts executable if needed:
@@ -68,3 +68,4 @@ Make the scripts executable if needed:
 ```bash
 chmod +x run.sh .venv/bin/run
 ```
+
