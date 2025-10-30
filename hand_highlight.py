@@ -28,6 +28,7 @@ def parse_args():
     parser.add_argument("--model_path", type=str, default="model.pkl", help="Path to save/load trained model")
     parser.add_argument("--two_hands", action="store_true", help="Use concatenated left+right hand features (2x63 floats) for recording/training/prediction")
     parser.add_argument("--demo", type=str, help="Demo mode: provide text to cycle through (e.g., 'hello my name is judah')")
+    parser.add_argument("--name", type=str, default="JUDAH",help="will but your name here when using the name sign")
     return parser.parse_args()
 
 
@@ -38,12 +39,19 @@ def main():
     mp_drawing = mp.solutions.drawing_utils
 
     cap = cv2.VideoCapture(args.camera)
+    
+    # Set resolution to 1920x1080
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+    
     if not cap.isOpened():
         print(f"Cannot open camera {args.camera}")
         return
 
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
+    # Get actual resolution (camera might not support exactly 1920x1080)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    print(f"Camera resolution: {width}x{height}")
 
     with mp_hands.Hands(
         max_num_hands=args.max_num_hands,
@@ -52,12 +60,23 @@ def main():
         min_tracking_confidence=args.min_tracking_confidence,
     ) as hands:
 
+        # Clear predictions.txt at startup
+        with open('predictions.txt', 'w') as f:
+            f.write('')
+
         # If training requested, we'll collect features and train after the loop
         prev_time = 0
         # Prediction smoothing
         pred_queue = deque(maxlen=8)
         smoothed_label = None
         current_text = ""
+        
+        # Prediction timing tracking
+        last_prediction = None
+        prediction_start_time = None
+        prediction_duration = 1.0  # seconds required for stable prediction
+        global pred_words
+        pred_words = []
 
         # Demo mode setup
         demo_words = []
@@ -70,6 +89,9 @@ def main():
             demo_words = demo_words_caps.strip().split()
             
             print(f"Demo mode: Will cycle through words: {demo_words}")
+        
+        #Pred bool
+        pred_bool = True
 
         while True:
             ret, frame = cap.read()
@@ -164,6 +186,7 @@ def main():
 
             # Prediction mode: if model exists, predict and smooth
             def pred():
+                nonlocal last_prediction, prediction_start_time
                 model = None
                 if os.path.exists(args.model_path):
                     try:
@@ -180,11 +203,38 @@ def main():
                             smoothed_label = max(set(pred_queue), key=pred_queue.count)
                         else:
                             smoothed_label = pred
+                        if pred=="VAR_NAME" or smoothed_label == "VAR_NAME":
+                            smoothed_label = args.name
+                        
+                        # Track prediction timing
+                        current_time = time.time()
+                        if smoothed_label != last_prediction:
+                            # Prediction changed, reset timing
+                            last_prediction = smoothed_label
+                            prediction_start_time = current_time
+                        elif prediction_start_time is not None:
+                            # Check if prediction has been stable for required duration
+                            if current_time - prediction_start_time >= prediction_duration:
+                                # Write to file if we haven't already written this prediction
+                                
+                                with open('predictions.txt', 'a') as f:
+                                    f.write(f"{smoothed_label}\n")
+                                
+                                pred_words.append(smoothed_label)
+                                print(f"Added {smoothed_label} to predictions")
+                                if smoothed_label == "CLEAR":
+                                    pred_words.clear()
+                                # Reset timing to prevent multiple writes of same prediction
+                                prediction_start_time = None
+                        
                         cv2.putText(frame, f"Pred: {smoothed_label}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
-                    except Exception:
+                        cv2.putText(frame, f" {' '.join(pred_words)}", (10, 160), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
+                    except Exception as e:
+                        print(f"Prediction error: {e}")
                         pass
             if demo_words == []:
-                pred()
+                if pred_bool == True:
+                    pred()
             # Blend overlay with frame (alpha)
             alpha = 0.25
             cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
@@ -235,6 +285,15 @@ def main():
 
             if key == ord('c'):
                 current_text = ""
+                demo_words = []
+                pred_bool = False
+
+            if key == ord('p'):
+                current_text = ""
+                pred_bool = True
+                if pred_bool == True:
+                    pred()
+
 
             if key == ord('b'):
                 current_text = current_text[:-1]

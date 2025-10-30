@@ -28,7 +28,10 @@ If you created a venv named `.venv` in the project root, a small helper script i
 `.venv\Scripts\run.cmd`. After activating the venv, you can start the app by simply typing:
 
 ```powershell
-# activate the venv first
+# First time only: Enable script execution (run PowerShell as Administrator)
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+# activate the venv (if you get a security warning, type 'R' to run anyway)
 .\.venv\Scripts\Activate.ps1
 
 # then run the app with no extra typing
@@ -57,10 +60,10 @@ pip install -r requirements.txt
 
 ```bash
 # run the project-level wrapper (will activate .venv if present)
-./run.sh --model_path model_onehand.pkl --demo "hello my name (name)"
+./run.sh --demo "hello my name judah"
 
 # or use the venv-local launcher created at .venv/bin/run
-.venv/bin/run --model_path model_onehand.pkl --demo "hello my name (name)"
+.venv/bin/run --demo "hello my name judah"
 ```
 
 Make the scripts executable if needed:
@@ -68,4 +71,3 @@ Make the scripts executable if needed:
 ```bash
 chmod +x run.sh .venv/bin/run
 ```
-
